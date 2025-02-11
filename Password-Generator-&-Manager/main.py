@@ -2,6 +2,9 @@ import sqlite3
 import secrets
 import string
 import base64
+import os
+import hashlib
+import getpass
 from cryptography.fernet import Fernet
 
 # Generate a secure encryption key (Run this once and store the key)
@@ -12,6 +15,8 @@ def generate_key():
 
 # Load the encryption key
 def load_key():
+    if not os.path.exists("key.key"):
+        generate_key()
     with open("key.key", "rb") as key_file:
         return key_file.read()
 
@@ -25,6 +30,10 @@ def decrypt_password(encrypted_password, key):
     cipher = Fernet(key)
     return cipher.decrypt(encrypted_password.encode()).decode()
 
+# Hash website names for better security (prevents lookup attacks)
+def hash_website(website):
+    return hashlib.sha256(website.encode()).hexdigest()
+
 # Generate a secure password
 def generate_password(length=16):
     chars = string.ascii_letters + string.digits + string.punctuation
@@ -37,7 +46,7 @@ def init_db():
     c.execute("""
         CREATE TABLE IF NOT EXISTS passwords (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            website TEXT NOT NULL,
+            website_hash TEXT NOT NULL UNIQUE,
             username TEXT NOT NULL,
             password TEXT NOT NULL
         )
@@ -48,21 +57,39 @@ def init_db():
 # Save password to database
 def save_password(website, username, password, key):
     encrypted_password = encrypt_password(password, key)
+    website_hash = hash_website(website)
+
     conn = sqlite3.connect("passwords.db")
     c = conn.cursor()
-    c.execute("INSERT INTO passwords (website, username, password) VALUES (?, ?, ?)", 
-              (website, username, encrypted_password))
+    
+    # Check if a password already exists for this website
+    c.execute("SELECT * FROM passwords WHERE website_hash=?", (website_hash,))
+    existing = c.fetchone()
+    
+    if existing:
+        confirm = input(f"A password for {website} already exists. Overwrite? (y/n): ").lower()
+        if confirm != 'y':
+            print("Operation cancelled.")
+            conn.close()
+            return
+
+    c.execute("INSERT OR REPLACE INTO passwords (website_hash, username, password) VALUES (?, ?, ?)", 
+              (website_hash, username, encrypted_password))
+    
     conn.commit()
     conn.close()
     print(f"Password for {website} saved successfully.")
 
 # Retrieve password
 def get_password(website, key):
+    website_hash = hash_website(website)
+
     conn = sqlite3.connect("passwords.db")
     c = conn.cursor()
-    c.execute("SELECT username, password FROM passwords WHERE website=?", (website,))
+    c.execute("SELECT username, password FROM passwords WHERE website_hash=?", (website_hash,))
     result = c.fetchone()
     conn.close()
+    
     if result:
         username, encrypted_password = result
         decrypted_password = decrypt_password(encrypted_password, key)
@@ -91,7 +118,7 @@ def main():
         elif choice == "2":
             website = input("Enter website: ")
             username = input("Enter username: ")
-            password = input("Enter password (or type 'gen' to generate one): ")
+            password = getpass.getpass("Enter password (or type 'gen' to generate one): ")
             if password.lower() == "gen":
                 password = generate_password()
                 print(f"Generated Password: {password}")
