@@ -1,7 +1,6 @@
 import sqlite3
 import secrets
 import string
-import base64
 import os
 import hashlib
 import getpass
@@ -30,19 +29,16 @@ def decrypt_password(encrypted_password, key):
     cipher = Fernet(key)
     return cipher.decrypt(encrypted_password.encode()).decode()
 
-# Hash website names for better security (prevents lookup attacks)
-def hash_website(website):
-    return hashlib.sha256(website.encode()).hexdigest()
-
-# Generate a secure password
-def generate_password(length=16):
-    chars = string.ascii_letters + string.digits + string.punctuation
-    return ''.join(secrets.choice(chars) for _ in range(length))
+# Hash passwords securely using SHA-256
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
 # Initialize database
 def init_db():
     conn = sqlite3.connect("passwords.db")
     c = conn.cursor()
+    
+    # Create table for passwords
     c.execute("""
         CREATE TABLE IF NOT EXISTS passwords (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,13 +47,70 @@ def init_db():
             password TEXT NOT NULL
         )
     """)
+
+    # Create table for master password
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS master_password (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            password_hash TEXT NOT NULL
+        )
+    """)
+    
     conn.commit()
     conn.close()
+
+# Set up the master password (Run once)
+def setup_master_password():
+    conn = sqlite3.connect("passwords.db")
+    c = conn.cursor()
+    c.execute("SELECT * FROM master_password")
+    
+    if c.fetchone() is None:
+        print("No master password found. Please set up a master password.")
+        master_password = getpass.getpass("Enter a new master password: ")
+        confirm_password = getpass.getpass("Confirm master password: ")
+        
+        if master_password == confirm_password:
+            hashed_password = hash_password(master_password)
+            c.execute("INSERT INTO master_password (password_hash) VALUES (?)", (hashed_password,))
+            conn.commit()
+            print("Master password set successfully!")
+        else:
+            print("Passwords do not match. Try again.")
+            setup_master_password()
+    
+    conn.close()
+
+# Verify master password at program start
+def verify_master_password():
+    conn = sqlite3.connect("passwords.db")
+    c = conn.cursor()
+    c.execute("SELECT password_hash FROM master_password")
+    stored_hash = c.fetchone()
+    
+    if stored_hash:
+        attempts = 3
+        while attempts > 0:
+            entered_password = getpass.getpass("Enter Master Password: ")
+            if hash_password(entered_password) == stored_hash[0]:
+                print("Access Granted!")
+                conn.close()
+                return True
+            else:
+                attempts -= 1
+                print(f"Incorrect password. {attempts} attempts left.")
+        
+        conn.close()
+        print("Too many failed attempts. Exiting.")
+        exit()
+    else:
+        print("Master password not set up. Exiting.")
+        exit()
 
 # Save password to database
 def save_password(website, username, password, key):
     encrypted_password = encrypt_password(password, key)
-    website_hash = hash_website(website)
+    website_hash = hash_password(website)
 
     conn = sqlite3.connect("passwords.db")
     c = conn.cursor()
@@ -82,7 +135,7 @@ def save_password(website, username, password, key):
 
 # Retrieve password
 def get_password(website, key):
-    website_hash = hash_website(website)
+    website_hash = hash_password(website)
 
     conn = sqlite3.connect("passwords.db")
     c = conn.cursor()
@@ -97,11 +150,18 @@ def get_password(website, key):
     else:
         return "No password found for this website."
 
-# Main function to interact
+# Generate a secure password
+def generate_password(length=16):
+    chars = string.ascii_letters + string.digits + string.punctuation
+    return ''.join(secrets.choice(chars) for _ in range(length))
+
+# Main function
 def main():
     key = load_key()
     init_db()
-    
+    setup_master_password()
+    verify_master_password()  # Ask for authentication at startup
+
     while True:
         print("\nPassword Manager Menu:")
         print("1. Generate Password")
